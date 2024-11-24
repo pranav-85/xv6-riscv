@@ -16,4 +16,3 @@ struct msg_queue {
 
 // Global array of message queues
 struct msg_queue msg_queues[MAX_QUEUES];
-```
