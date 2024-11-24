@@ -740,6 +740,7 @@ To link the system call number to its kernel implementation, update the `syscall
     `[SYS_sigint] sys_sigint,`
 ```
 This links the system call number to its implementation in the kernel.
+* * * * *
 ### 3\. Assign a Unique System Call Number
 
 In `syscall.h`, define a unique system call number for `sigint`. Ensure this number does not conflict with existing system calls.
@@ -748,6 +749,7 @@ In `syscall.h`, define a unique system call number for `sigint`. Ensure this num
 ```c
 `#define SYS_sigint 23`
 ```
+* * * * *
 ### 4\. Add a User-Space Interface
 
 To enable user programs to call the `sigint` system call, add its prototype and generate the required assembly stubs:
