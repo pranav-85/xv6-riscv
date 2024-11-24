@@ -689,10 +689,10 @@ int sys_createfile(void) {
 }
 ```
 
-Here's the **full markdown document** with detailed, well-structured steps for each stage:
-```
-`# Adding `sigint` System Call in xv6
-```
+## **System Call: `SIGINT`**
+
+## Adding `sigint` System Call in xv6
+
 This document explains the steps to add a new system call, `sigint`, to xv6. The `sigint` system call terminates the current process by marking it as killed.
 
 
