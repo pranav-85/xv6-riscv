@@ -225,7 +225,7 @@ struct semaphore {
 
 ### Key System Calls
 
-#### 1. sem_create()
+#### 1. sem_create(char *name, int value)
 - **Purpose**: Creates a new semaphore
 - **Implementation**:
   ```c
@@ -263,7 +263,7 @@ struct semaphore {
   return -1;
   ```
 
-#### 2. sem_wait()
+#### 2. sem_wait(sem_id)
 - **Purpose**: Decrements semaphore value or blocks if zero
 - **Implementation**:
   ```c
@@ -292,7 +292,7 @@ struct semaphore {
   release(&s->lock);
   ```
 
-#### 3. sem_signal()
+#### 3. sem_signal(int sem_id)
 - **Purpose**: Increments semaphore value and wakes waiting process
 - **Implementation**:
   ```c
@@ -315,7 +315,7 @@ struct semaphore {
   release(&s->lock);
   ```
 
-#### 4. sem_delete()
+#### 4. sem_delete(int sem_id)
 - **Purpose**: Deletes a semaphore
 - **Implementation**:
   ```c
@@ -341,44 +341,6 @@ struct semaphore {
   return 0;
   ```
 
-## 3. Key Implementation Notes
-
-### Message Queue Features:
-1. **Circular Buffer**: Implements a circular buffer to efficiently use memory
-2. **Reference Counting**: Tracks number of processes using the queue
-3. **Lock Protection**: Uses spinlocks to protect queue operations
-4. **Dynamic Memory**: Allocates/frees memory for messages dynamically
-
-### Semaphore Features:
-1. **Named Semaphores**: Each semaphore can have a descriptive name
-2. **Process Queue**: Maintains list of waiting processes
-3. **FIFO Ordering**: Processes are woken in first-in-first-out order
-4. **Reference Counting**: Tracks number of processes using the semaphore
-
-### Synchronization Mechanisms:
-1. **Spinlocks**: Used for short-term synchronization
-2. **Sleep/Wakeup**: Used for longer-term blocking
-3. **Atomic Operations**: Ensures thread-safety of operations
-
-### Error Handling:
-1. Range checking on queue and semaphore IDs
-2. Memory allocation failure detection
-3. Queue full/empty condition handling
-4. Invalid operation detection
-
-## 4. Usage Guidelines
-
-### Message Queues:
-1. Always check return values for errors
-2. Close queues when done to prevent resource leaks
-3. Keep messages smaller than MAX_MSG_SIZE
-4. Handle queue full/empty conditions appropriately
-
-### Semaphores:
-1. Initialize with appropriate starting values
-2. Always pair wait() with signal()
-3. Clean up semaphores when done
-4. Be careful of deadlock situations
 
 ## **System Call: `rename`**
 
