@@ -1,5 +1,4 @@
-# XV6 IPC Mechanisms Documentation
-## Message Queues and Semaphores Implementation
+# XV6 System Calls  Documentation
 
 ## 1. Message Queue Implementation
 
@@ -209,18 +208,19 @@ struct spinlock msgqueue_lock;
 ### Core Data Structures
 
 ```c
-// Semaphore Structure
-struct semaphore {
-  int value;                  // Semaphore counter
-  char name[16];             // Semaphore name
-  struct spinlock lock;      // Lock for synchronization
-  struct proc *waiting[64];  // Array of waiting processes
-  int wait_count;           // Number of waiting processes
-  int ref_count;            // Number of processes using semaphore
-};
+#include "spinlock.h"
+#include "param.h"
+#define MAX_SEMAPHORES 32
+#define SEM_NAME_LEN   16
 
-// Global array of semaphores
-struct semaphore semaphores[MAX_SEMS];
+struct semaphore {
+  int value;                    // Current semaphore value
+  struct spinlock lock;         // Lock for atomic operations
+  struct proc *waiting[NPROC];  // Array of waiting processes
+  int nwaiting;                // Number of waiting processes
+  int inuse;                   // Whether this semaphore slot is in use
+  char name[SEM_NAME_LEN];     // Name of the semaphore
+};
 ```
 
 ### Key System Calls
@@ -229,98 +229,116 @@ struct semaphore semaphores[MAX_SEMS];
 - **Purpose**: Creates a new semaphore
 - **Implementation**:
   ```c
-  int
-  sem_create(char *name, int value)
-  {
-    // Find available semaphore slot
-    for(int i = 0; i < MAX_SEMS; i++) {
-      if(semaphores[i].ref_count == 0) {
-        // Initialize semaphore
-        semaphores[i].value = value;
-        strncpy(semaphores[i].name, name, 15);
-        semaphores[i].name[15] = 0;
-        semaphores[i].wait_count = 0;
-        semaphores[i].ref_count = 1;
-        initlock(&semaphores[i].lock, "sem");
-        return i;  // Return semaphore ID
-      }
+  struct semaphore *s;
+  int i;
+
+  if(name == 0 || strlen(name) >= SEM_NAME_LEN)
+    return -1;
+
+  acquire(&stable.lock);
+
+  // Check if semaphore already exists
+  for(i = 0; i < MAX_SEMAPHORES; i++) {
+    s = &stable.sems[i];
+    if(s->inuse && strncmp(s->name, name, SEM_NAME_LEN) == 0) {
+      release(&stable.lock);
+      return i;
     }
-    return -1;    // No available semaphores
   }
+
+  // Find free slot
+  for(i = 0; i < MAX_SEMAPHORES; i++) {
+    s = &stable.sems[i];
+    if(!s->inuse) {
+      s->inuse = 1;
+      s->value = value;
+      s->nwaiting = 0;
+      safestrcpy(s->name, name, SEM_NAME_LEN);
+      release(&stable.lock);
+      return i;
+    }
+  }
+
+  release(&stable.lock);
+  return -1;
   ```
 
 #### 2. sem_wait()
 - **Purpose**: Decrements semaphore value or blocks if zero
 - **Implementation**:
   ```c
-  int
-  sem_wait(int sid)
-  {
-    if(sid < 0 || sid >= MAX_SEMS)
-      return -1;
-    
-    struct semaphore *s = &semaphores[sid];
-    acquire(&s->lock);
-    
-    while(s->value <= 0) {
-      // Add process to waiting list
-      s->waiting[s->wait_count++] = myproc();
-      sleep(myproc(), &s->lock);
+  struct semaphore *s;
+  struct proc *p = myproc();
+
+  if(sem_id < 0 || sem_id >= MAX_SEMAPHORES)
+    return;
+
+  s = &stable.sems[sem_id];
+  acquire(&s->lock);
+
+  while(s->value <= 0) {
+    if(s->nwaiting < NPROC) {
+      s->waiting[s->nwaiting++] = p;
+      sleep(p, &s->lock);  // Releases lock while sleeping
     }
-    
-    s->value--;
-    release(&s->lock);
-    return 0;
+    // Re-acquire lock after wakeup
+    if(!s->inuse) {
+      release(&s->lock);
+      return;
+    }
   }
+
+  s->value--;
+  release(&s->lock);
   ```
 
 #### 3. sem_signal()
 - **Purpose**: Increments semaphore value and wakes waiting process
 - **Implementation**:
   ```c
-  int
-  sem_signal(int sid)
-  {
-    if(sid < 0 || sid >= MAX_SEMS)
-      return -1;
-    
-    struct semaphore *s = &semaphores[sid];
-    acquire(&s->lock);
-    
-    s->value++;
-    
-    // Wake up one waiting process
-    if(s->wait_count > 0) {
-      wakeup(s->waiting[--s->wait_count]);
-    }
-    
-    release(&s->lock);
-    return 0;
+  struct semaphore *s;
+  struct proc *p;
+
+  if(sem_id < 0 || sem_id >= MAX_SEMAPHORES)
+    return;
+
+  s = &stable.sems[sem_id];
+  acquire(&s->lock);
+
+  s->value++;
+
+  if(s->nwaiting > 0) {
+    p = s->waiting[--s->nwaiting];
+    wakeup(p);
   }
+
+  release(&s->lock);
   ```
 
 #### 4. sem_delete()
 - **Purpose**: Deletes a semaphore
 - **Implementation**:
   ```c
-  int
-  sem_delete(int sid)
-  {
-    if(sid < 0 || sid >= MAX_SEMS)
-      return -1;
-    
-    struct semaphore *s = &semaphores[sid];
-    acquire(&s->lock);
-    
-    // Wake up all waiting processes
-    while(s->wait_count > 0) {
-      wakeup(s->waiting[--s->wait_count]);
-    }
-    
-    s->ref_count--;
+  struct semaphore *s;
+
+  if(sem_id < 0 || sem_id >= MAX_SEMAPHORES)
+    return -1;
+
+  s = &stable.sems[sem_id];
+  acquire(&s->lock);
+
+  if(!s->inuse) {
     release(&s->lock);
-    return 0;
+    return -1;
   }
+
+  while(s->nwaiting > 0) {
+    wakeup(s->waiting[--s->nwaiting]);
+  }
+
+  s->inuse = 0;
+  release(&s->lock);
+  return 0;
   ```
 
 ## 3. Key Implementation Notes
