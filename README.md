@@ -1,4 +1,151 @@
-# XV6 System Calls  Documentation
+# XV6 System Calls Documentation
+
+---
+
+## **Steps to Add a System Call in xv6**
+
+---
+
+#### **1. Define the System Call Function in the Kernel**
+
+Write the function that implements your system call in one of the kernel files (e.g., `sysproc.c` or a relevant file based on the purpose of the system call).  
+- **Example:** Add the `sys_rename` function in `sysfile.c`.
+
+```c
+// In sysfile.c or appropriate kernel file
+int sys_rename(void) {
+    // Your implementation here
+    return 0; // Example: Replace with actual functionality
+}
+```
+
+---
+
+#### **2. Add an Entry in the System Call Table**
+
+Update the `syscall.c` file to link the system call number to your function.  
+- **File:** `syscall.c`  
+- **Action:** Add your function to the `syscalls` array.
+
+```c
+extern int sys_rename(void); // Declare the function
+
+static int (*syscalls[])(void) = {
+    // Other system calls
+    [SYS_rename] sys_rename,
+};
+```
+
+---
+
+#### **3. Assign a Unique System Call Number**
+
+Define a unique identifier for the system call.  
+- **File:** `kernel/syscall.h`  
+- **Action:** Add a constant for the system call number.
+
+```c
+#define SYS_rename 22 // Use the next available number
+```
+
+---
+
+#### **4. Update `syscall.c` to Parse Arguments**
+
+If your system call takes arguments, use `argstr`, `argint`, or similar functions to fetch them.  
+- **File:** `syscall.c`  
+- **Action:** Map system call arguments to variables.
+
+```c
+if (argstr(0, oldpath, MAXPATH) < 0 || argstr(1, newpath, MAXPATH) < 0) {
+    return -1; // Example: Fetch strings passed from user space
+}
+```
+
+---
+
+#### **5. Add a Prototype in `user.h`**
+
+Declare the user-space interface for the system call.  
+- **File:** `user/user.h`  
+- **Action:** Add a prototype for the system call.
+
+```c
+int rename(const char *oldpath, const char *newpath);
+```
+
+---
+
+#### **6. Update the `usys.pl` File**
+
+Add your system call to `usys.pl` to generate the assembly stubs required for user programs.  
+- **File:** `user/usys.pl`  
+- **Action:** Add the name of the system call.
+
+```perl
+entry("rename");
+```
+
+Run `make` to regenerate `usys.S`.
+
+---
+
+#### **7. Implement a User Program**
+
+Write a user-space program to test your system call.  
+- **Example:**
+
+```c
+#include "kernel/types.h"
+#include "user.h"
+
+int main(int argc, char *argv[]) {
+    if (argc != 3) {
+        printf("Usage: rename oldpath newpath\n");
+        exit(1);
+    }
+
+    if (rename(argv[1], argv[2]) < 0) {
+        printf("Rename failed\n");
+        exit(1);
+    }
+
+    printf("Rename succeeded\n");
+    exit(0);
+}
+```
+
+---
+
+#### **8. Rebuild the xv6 Kernel**
+
+Run the following commands to compile the kernel with the new system call:
+```bash
+make clean
+make qemu
+```
+
+---
+
+#### **9. Test the System Call**
+
+Use the test program you wrote or call the system call directly in another user program.
+
+---
+
+### **Summary of Files to Modify**
+1. **Kernel Implementation:**
+   - `sysfile.c` (or relevant file): Write the system call implementation.
+   - `syscall.c`: Add the function to the system call table.
+   - `syscall.h`: Define a unique system call number.
+
+2. **User Space:**
+   - `user/user.h`: Declare the system call prototype.
+   - `user/usys.pl`: Add the system call to the list.
+
+3. **Testing:**
+   - Write a user program for testing the system call.
+     
 
 ## 1. Message Queue Implementation
 
