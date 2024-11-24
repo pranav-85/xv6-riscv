@@ -1,107 +1,19 @@
-**Prompt:** Provide full documentation in Markdown syntax for XV6 IPC mechanisms, incorporating the suggestions from the previous response.
+# xv6 System calls Addition Documentation
+## Message Queue Implementation
 
-**Here's the enhanced documentation:**
-
-## XV6 IPC Mechanisms: Message Queues and Semaphores
-
-### Message Queues
-
-**Data Structures:**
+### Core Data Structures
 
 ```c
+// Message Queue Structure
 struct msg_queue {
-    char* items[MAX_QUEUE_SIZE]; // Array to store messages
-    int front;                   // Index for dequeuing
-    int rear;                    // Index for enqueuing
-    int size;                    // Current number of messages
-    int ref_count;                // Number of processes using the queue
-    struct spinlock lock;         // Lock for synchronization
+  char* items[MAX_QUEUE_SIZE];  // Array to store messages
+  int front;                    // Index for dequeuing
+  int rear;                     // Index for enqueuing
+  int size;                     // Current number of messages
+  int ref_count;               // Number of processes using the queue
+  struct spinlock lock;        // Lock for synchronization
 };
 
-struct msg_queue msg_queues[MAX_QUEUES]; // Global array of message queues
+// Global array of message queues
+struct msg_queue msg_queues[MAX_QUEUES];
 ```
-
-**System Calls:**
-
-1. **`msgget()`**
-   - Creates or gets access to a message queue.
-   - Returns the queue ID on success, -1 on failure.
-
-2. **`msgsend()`**
-   - Sends a message to a queue.
-   - Returns 0 on success, -1 on failure (e.g., queue full, invalid queue ID).
-
-3. **`msgrcv()`**
-   - Receives a message from a queue.
-   - Returns the number of bytes received on success, -1 on failure (e.g., queue empty, invalid queue ID).
-
-4. **`msgclose()`**
-   - Closes access to a message queue.
-   - Returns 0 on success, -1 on failure.
-
-**Implementation Details:**
-
-- **Circular Buffer:** Implements a circular buffer for efficient memory usage.
-- **Reference Counting:** Tracks the number of processes using a queue to facilitate proper cleanup.
-- **Lock Protection:** Uses spinlocks to ensure thread safety.
-- **Dynamic Memory Allocation:** Allocates memory for messages dynamically to avoid fixed-size limitations.
-- **Error Handling:** Includes error checking for invalid queue IDs, queue full/empty conditions, and memory allocation failures.
-
-### Semaphores
-
-**Data Structures:**
-
-```c
-struct semaphore {
-    int value;                   // Semaphore counter
-    char name[16];                // Semaphore name
-    struct spinlock lock;         // Lock for synchronization
-    struct proc *waiting[64];     // Array of waiting processes
-    int wait_count;               // Number of waiting processes
-    int ref_count;                // Number of processes using the semaphore
-};
-
-struct semaphore semaphores[MAX_SEMS]; // Global array of semaphores
-```
-
-**System Calls:**
-
-1. **`sem_create()`**
-   - Creates a new semaphore.
-   - Returns the semaphore ID on success, -1 on failure.
-
-2. **`sem_wait()`**
-   - Decrements the semaphore value or blocks the process if the value is zero.
-   - Returns 0 on success, -1 on failure.
-
-3. **`sem_signal()`**
-   - Increments the semaphore value and wakes up a waiting process.
-   - Returns 0 on success, -1 on failure.
-
-4. **`sem_delete()`**
-   - Deletes a semaphore.
-   - Returns 0 on success, -1 on failure.
-
-**Implementation Details:**
-
-- **Named Semaphores:** Allows for easier identification and management.
-- **Process Queue:** Maintains a queue of waiting processes for efficient scheduling.
-- **FIFO Ordering:** Ensures fair scheduling of waiting processes.
-- **Reference Counting:** Tracks the number of processes using a semaphore to facilitate proper cleanup.
-- **Deadlock Prevention:** Consider using techniques like resource ordering and timeout mechanisms to avoid deadlocks.
-- **Priority Inversion:** Be aware of potential priority inversion issues and use priority inheritance protocols if necessary.
-
-**Usage Guidelines:**
-
-- **Message Queues:**
-  - Always check return values for errors.
-  - Close queues when done to prevent resource leaks.
-  - Handle queue full/empty conditions appropriately.
-  - Consider using a timeout mechanism for `msgrcv` to avoid indefinite blocking.
-- **Semaphores:**
-  - Initialize semaphores with appropriate starting values.
-  - Always pair `sem_wait()` with `sem_signal()`.
-  - Clean up semaphores when done.
-  - Be mindful of potential deadlock situations and use appropriate techniques to prevent them.
-
-By following these guidelines and considering the additional suggestions, you can effectively use XV6's IPC mechanisms to build robust and efficient concurrent programs.
