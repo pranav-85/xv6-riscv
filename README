@@ -3,6 +3,7 @@
 
 ### Core Data Structures
 
-``` bash
-cd my
+```bash
+pip install streamlit pandas scikit-learn
+
 ```
