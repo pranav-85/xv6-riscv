@@ -688,3 +688,167 @@ int sys_createfile(void) {
   return fd;
 }
 ```
+
+Here's the **full markdown document** with detailed, well-structured steps for each stage:
+```
+`# Adding `sigint` System Call in xv6
+```
+This document explains the steps to add a new system call, `sigint`, to xv6. The `sigint` system call terminates the current process by marking it as killed.
+
+
+## Overview
+
+The `sigint` system call is designed to terminate the calling process by marking it as killed. This document outlines the steps required to implement, integrate, and test this system call in the xv6 operating system.
+
+---
+
+## Steps to Implement
+
+### 1. Modify the Kernel
+
+The implementation of the `sigint` system call resides in `sysproc.c`. This function retrieves the current process, logs its termination, and marks it as killed.
+
+#### Code in `sysproc.c`:
+```c
+uint64 sys_sigint(void) {
+    struct proc *p = myproc();  // Get the current process
+
+    if (p) {
+        printf("SIGINT: Terminating process %d\n", p->pid);
+        p->killed = 1;  // Mark the process as killed
+    }
+    return 0;  // Return 0 on success
+} 
+```
+
+* * * * *
+
+### 2\. Update the System Call Table
+
+To link the system call number to its kernel implementation, update the `syscall.c` file:
+
+1.  **Declare the New System Call Function**\
+    Add the following declaration at the top of `syscall.c`:
+
+```
+    `extern uint64 sys_sigint(void);`
+```
+2.  **Add the `sys_sigint` Function to the System Call Array**\
+    Map the system call number (`SYS_sigint`) to the `sys_sigint` function:
+
+``` c
+    `[SYS_sigint] sys_sigint,`
+```
+This links the system call number to its implementation in the kernel.
+### 3\. Assign a Unique System Call Number
+
+In `syscall.h`, define a unique system call number for `sigint`. Ensure this number does not conflict with existing system calls.
+
+#### Code in `syscall.h`:
+```c
+`#define SYS_sigint 23`
+```
+### 4\. Add a User-Space Interface
+
+To enable user programs to call the `sigint` system call, add its prototype and generate the required assembly stubs:
+
+1.  **Add the Prototype in `user/user.h`**\
+    Declare the `sigint` function as follows:
+``` c
+    `int sigint(void);`
+```
+2.  **Update `usys.pl`**\
+    Add an entry for `sigint` to the list of system calls in `usys.pl`:
+
+    perl
+``` 
+    `entry("sigint");`
+``` 
+    Run `make` to regenerate the `usys.S` file.
+    
+* * * * *
+
+### 5\. Create a Test Program
+
+Create a test program to verify the functionality of the `sigint` system call. This program attempts to call `sigint` and terminate itself.
+
+#### Code in `sigint_test.c` (in the `user` directory):
+``` c
+`#include "user.h"
+
+int main() {
+    printf("Testing SIGINT system call\n");
+    sigint();  // Call the SIGINT system call to terminate
+    printf("Returned from SIGINT system call\n");  // This will not execute if sigint terminates
+    exit(0);
+}
+```
+
+* * * * *
+
+### 6\. Update the Makefile
+
+Add the test program to the list of user binaries in the `Makefile`:
+
+#### Code in `Makefile`:
+
+```
+`$U/_sigint_test\`
+```
+* * * * *
+
+### 7\. Build and Test
+
+1.  **Rebuild the xv6 Kernel**:\
+    Run the following commands to clean, build, and start xv6:
+
+    bash
+```
+    make clean
+    make qemu
+```
+2.  **Run the Test Program**:\
+    Inside the xv6 shell, execute the test program:
+
+    bash
+
+   ```
+    ./sigint_test
+```
+    **Expected Output**:
+
+    `Testing SIGINT system call
+    SIGINT: Terminating process <pid>`
+
+    The message `Returned from SIGINT system call` will not appear since the process is terminated by the `sigint` system call.
+
+* * * * *
+
+Summary of Changes
+------------------
+
+### Kernel Changes
+
+-   **`sysproc.c`**: Implemented the `sys_sigint` function.
+-   **`syscall.c`**: Declared `sys_sigint` and added it to the `syscalls` array.
+-   **`syscall.h`**: Defined the `SYS_sigint` constant.
+
+### User-Space Changes
+
+-   **`user/user.h`**: Added the prototype for `sigint`.
+-   **`user/usys.pl`**: Added an entry for `sigint` to generate assembly stubs.
+-   **`sigint_test.c`**: Created a user-space program to test the system call.
+
+### Build System
+
+-   **`Makefile`**: Added `sigint_test` to the user binaries.
+
+* * * * *
+
+Conclusion
+----------
+
+The `sigint` system call was successfully added to xv6. This process demonstrates how to implement a new system call, integrate it into the kernel, and test it with a user program. The steps outlined here can serve as a reference for adding similar functionality in xv6.
+
+```
+ `This markdown document includes every step in detail, with clear explanations and code snippe```
