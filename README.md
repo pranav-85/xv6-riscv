@@ -6,18 +6,28 @@
 ### Core Data Structures
 
 ```c
-// Message Queue Structure
-struct msg_queue {
-  char* items[MAX_QUEUE_SIZE];  // Array to store messages
-  int front;                    // Index for dequeuing
-  int rear;                     // Index for enqueuing
-  int size;                     // Current number of messages
-  int ref_count;               // Number of processes using the queue
-  struct spinlock lock;        // Lock for synchronization
+struct msg {
+  char* content;
+  int size;
+  struct msg* next;
 };
 
-// Global array of message queues
-struct msg_queue msg_queues[MAX_QUEUES];
+struct msgqueue {
+  struct msg* head;
+  struct msg* tail;
+  int max_msgs;    // Maximum number of messages in queue
+  int curr_msgs;   // Current number of messages
+  int max_size;    // Maximum size of each message
+  int refs;        // Number of processes referencing this queue
+  struct spinlock lock;
+};
+
+#define MAX_QUEUES 16
+#define MAX_MSG_SIZE 256
+#define MAX_MSGS_PER_QUEUE 32
+
+struct msgqueue msgqueues[MAX_QUEUES];
+struct spinlock msgqueue_lock;
 ```
 
 ### Key System Calls
@@ -26,116 +36,172 @@ struct msg_queue msg_queues[MAX_QUEUES];
 - **Purpose**: Creates or gets access to a message queue
 - **Implementation**:
   ```c
-  int
-  msgget(void)
-  {
-    // Find first available queue slot
-    for(int i = 0; i < MAX_QUEUES; i++) {
-      if(msg_queues[i].ref_count == 0) {
-        // Initialize queue
-        msg_queues[i].front = 0;
-        msg_queues[i].rear = 0;
-        msg_queues[i].size = 0;
-        msg_queues[i].ref_count = 1;
-        initlock(&msg_queues[i].lock, "msgq");
-        return i;  // Return queue ID
-      }
+  acquire(&msgqueue_lock);
+  
+  // Find free queue
+  int i;
+  for(i = 0; i < MAX_QUEUES; i++) {
+    if(msgqueues[i].refs == 0) {
+      msgqueues[i].refs = 1;
+      release(&msgqueue_lock);
+      return i;
     }
-    return -1;    // No available queues
   }
+  
+  release(&msgqueue_lock);
+  return -1; // No free queues
   ```
 
 #### 2. msgsend()
 - **Purpose**: Sends a message to a queue
 - **Implementation**:
   ```c
-  int
-  msgsend(int qid, char* msg, int size)
-  {
-    if(qid < 0 || qid >= MAX_QUEUES)
-      return -1;
+  int qid;
+  char* content;
+  int size;
+  
+  argint(0, &qid);
+  argaddr(1, (uint64*)&content);
+  argint(2, &size);
     
-    struct msg_queue *q = &msg_queues[qid];
-    acquire(&q->lock);
+  if(qid < 0 || qid >= MAX_QUEUES || size > MAX_MSG_SIZE)
+    return -1;
     
-    // Check if queue is full
-    if(q->size == MAX_QUEUE_SIZE) {
-      release(&q->lock);
-      return -1;
-    }
-    
-    // Copy message to queue
-    char* new_msg = kalloc();
-    memmove(new_msg, msg, size);
-    q->items[q->rear] = new_msg;
-    q->rear = (q->rear + 1) % MAX_QUEUE_SIZE;
-    q->size++;
-    
+  struct msgqueue* q = &msgqueues[qid];
+  acquire(&q->lock);
+  
+  if(q->refs == 0 || q->curr_msgs >= q->max_msgs) {
     release(&q->lock);
-    return 0;
+    return -1;
   }
+  
+  // Use kalloc() for memory allocation
+  char* buf = kalloc();  // Allocate a page for message content
+  if(buf == 0) {
+    release(&q->lock);
+    return -1;
+  }
+  
+  struct msg* m = (struct msg*)kalloc();  // Allocate msg structure
+  if(m == 0) {
+    kfree(buf);
+    release(&q->lock);
+    return -1;
+  }
+  
+  if(copyin(myproc()->pagetable, buf, (uint64)content, size) < 0) {
+    kfree(buf);
+    kfree((char*)m);
+    release(&q->lock);
+    return -1;
+  }
+  
+  m->content = buf;
+  m->size = size;
+  m->next = 0;
+  
+  if(q->tail) {
+    q->tail->next = m;
+    q->tail = m;
+  } else {
+    q->head = q->tail = m;
+  }
+  
+  q->curr_msgs++;
+  release(&q->lock);
+  wakeup(q);  // Wake up any waiting receivers
+  
+  return 0;
   ```
 
 #### 3. msgrcv()
 - **Purpose**: Receives a message from a queue
 - **Implementation**:
   ```c
-  int
-  msgrcv(int qid, char* buf, int size)
-  {
-    if(qid < 0 || qid >= MAX_QUEUES)
-      return -1;
+  int qid;
+  char* buf;
+  int size;
+  
+  argint(0, &qid);
+  argaddr(1, (uint64*)&buf);
+  argint(2, &size);
     
-    struct msg_queue *q = &msg_queues[qid];
-    acquire(&q->lock);
+  if(qid < 0 || qid >= MAX_QUEUES || size < 0)
+    return -1;
     
-    // Check if queue is empty
-    if(q->size == 0) {
-      release(&q->lock);
-      return -1;
-    }
-    
-    // Copy message from queue to user buffer
-    char* msg = q->items[q->front];
-    int msg_size = strlen(msg);
-    if(msg_size > size)
-      msg_size = size;
-    memmove(buf, msg, msg_size);
-    
-    // Free queue slot
-    kfree(msg);
-    q->front = (q->front + 1) % MAX_QUEUE_SIZE;
-    q->size--;
-    
-    release(&q->lock);
-    return msg_size;
+  struct msgqueue* q = &msgqueues[qid];
+  acquire(&q->lock);
+  
+  while(q->curr_msgs == 0 && q->refs > 0) {
+    sleep(q, &q->lock);
   }
+  
+  if(q->refs == 0) {
+    release(&q->lock);
+    return -1;
+  }
+  
+  struct msg* m = q->head;
+  if(m == 0) {
+    release(&q->lock);
+    return -1;
+  }
+  
+  int copy_size = m->size < size ? m->size : size;
+  if(copyout(myproc()->pagetable, (uint64)buf, m->content, copy_size) < 0) {
+    release(&q->lock);
+    return -1;
+  }
+  
+  q->head = m->next;
+  if(q->head == 0)
+    q->tail = 0;
+  
+  q->curr_msgs--;
+  
+  kfree(m->content);
+  kfree((char*)m);
+  
+  release(&q->lock);
+  return copy_size;
   ```
 
 #### 4. msgclose()
 - **Purpose**: Closes access to a message queue
 - **Implementation**:
   ```c
-  int
-  msgclose(int qid)
-  {
-    if(qid < 0 || qid >= MAX_QUEUES)
-      return -1;
+  int qid;
+  
+  argint(0, &qid);
     
-    struct msg_queue *q = &msg_queues[qid];
-    acquire(&q->lock);
+  if(qid < 0 || qid >= MAX_QUEUES)
+    return -1;
     
-    // Free any remaining messages
-    while(q->size > 0) {
-      kfree(q->items[q->front]);
-      q->front = (q->front + 1) % MAX_QUEUE_SIZE;
-      q->size--;
-    }
-    
-    q->ref_count--;
+  struct msgqueue* q = &msgqueues[qid];
+  acquire(&q->lock);
+  
+  if(q->refs <= 0) {
     release(&q->lock);
-    return 0;
+    return -1;
   }
+  
+  q->refs--;
+  
+  if(q->refs == 0) {
+    // Free all remaining messages
+    struct msg* m = q->head;
+    while(m) {
+      struct msg* next = m->next;
+      kfree(m->content);
+      kfree((char*)m);
+      m = next;
+    }
+    q->head = q->tail = 0;
+    q->curr_msgs = 0;
+  }
+  
+  release(&q->lock);
+  return 0;
   ```
 
 ## 2. Semaphore Implementation
