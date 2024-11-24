@@ -1,46 +1,354 @@
-xv6 is a re-implementation of Dennis Ritchie's and Ken Thompson's Unix
-Version 6 (v6).  xv6 loosely follows the structure and style of v6,
-but is implemented for a modern RISC-V multiprocessor using ANSI C.
+# XV6 IPC Mechanisms Documentation
 
-ACKNOWLEDGMENTS
+## Message Queues and Semaphores Implementation
 
-xv6 is inspired by John Lions's Commentary on UNIX 6th Edition (Peer
-to Peer Communications; ISBN: 1-57398-013-7; 1st edition (June 14,
-2000)).  See also https://pdos.csail.mit.edu/6.1810/, which provides
-pointers to on-line resources for v6.
+### 1. Message Queue Implementation
 
-The following people have made contributions: Russ Cox (context switching,
-locking), Cliff Frey (MP), Xiao Yu (MP), Nickolai Zeldovich, and Austin
-Clements.
+#### Core Data Structures
 
-We are also grateful for the bug reports and patches contributed by
-Takahiro Aoyagi, Marcelo Arroyo, Silas Boyd-Wickizer, Anton Burtsev,
-carlclone, Ian Chen, Dan Cross, Cody Cutler, Mike CAT, Tej Chajed,
-Asami Doi,Wenyang Duan, eyalz800, Nelson Elhage, Saar Ettinger, Alice
-Ferrazzi, Nathaniel Filardo, flespark, Peter Froehlich, Yakir Goaron,
-Shivam Handa, Matt Harvey, Bryan Henry, jaichenhengjie, Jim Huang,
-Matúš Jókay, John Jolly, Alexander Kapshuk, Anders Kaseorg, kehao95,
-Wolfgang Keller, Jungwoo Kim, Jonathan Kimmitt, Eddie Kohler, Vadim
-Kolontsov, Austin Liew, l0stman, Pavan Maddamsetti, Imbar Marinescu,
-Yandong Mao, Matan Shabtay, Hitoshi Mitake, Carmi Merimovich, Mark
-Morrissey, mtasm, Joel Nider, Hayato Ohhashi, OptimisticSide,
-phosphagos, Harry Porter, Greg Price, RayAndrew, Jude Rich, segfault,
-Ayan Shafqat, Eldar Sehayek, Yongming Shen, Fumiya Shigemitsu, snoire,
-Taojie, Cam Tenny, tyfkda, Warren Toomey, Stephen Tu, Alissa Tung,
-Rafael Ubal, Amane Uehara, Pablo Ventura, Xi Wang, WaheedHafez,
-Keiichi Watanabe, Lucas Wolf, Nicolas Wolovick, wxdao, Grant Wu, x653,
-Jindong Zhang, Icenowy Zheng, ZhUyU1997, and Zou Chang Wei.
+```c
+// Message Queue Structure
+struct msg_queue {
+  char* items[MAX_QUEUE_SIZE];  // Array to store messages
+  int front;                    // Index for dequeuing
+  int rear;                     // Index for enqueuing
+  int size;                     // Current number of messages
+  int ref_count;                // Number of processes using the queue
+  struct spinlock lock;         // Lock for synchronization
+};
+```
 
-ERROR REPORTS
+- **items**: Array that holds the actual messages in the queue.
+- **front**: The index where the next message will be dequeued from.
+- **rear**: The index where the next message will be enqueued to.
+- **size**: The current number of messages in the queue.
+- **ref_count**: Tracks the number of processes using the queue.
+- **lock**: A spinlock used to protect the message queue during operations.
 
-Please send errors and suggestions to Frans Kaashoek and Robert Morris
-(kaashoek,rtm@mit.edu).  The main purpose of xv6 is as a teaching
-operating system for MIT's 6.1810, so we are more interested in
-simplifications and clarifications than new features.
+#### Global Array of Message Queues
 
-BUILDING AND RUNNING XV6
+```c
+struct msg_queue msg_queues[MAX_QUEUES];
+```
 
-You will need a RISC-V "newlib" tool chain from
-https://github.com/riscv/riscv-gnu-toolchain, and qemu compiled for
-riscv64-softmmu.  Once they are installed, and in your shell
-search path, you can run "make qemu".
+- **msg_queues**: Global array that holds all the available message queues.
+
+### Key System Calls
+
+#### 1. `msgget()`
+
+**Purpose**: Creates or gets access to a message queue.
+
+```c
+int msgget(void)
+{
+  // Find first available queue slot
+  for(int i = 0; i < MAX_QUEUES; i++) {
+    if(msg_queues[i].ref_count == 0) {
+      // Initialize queue
+      msg_queues[i].front = 0;
+      msg_queues[i].rear = 0;
+      msg_queues[i].size = 0;
+      msg_queues[i].ref_count = 1;
+      initlock(&msg_queues[i].lock, "msgq");
+      return i;  // Return queue ID
+    }
+  }
+  return -1;  // No available queues
+}
+```
+
+- Finds the first available slot in `msg_queues` and initializes it.
+- Returns the queue ID or `-1` if no queues are available.
+
+#### 2. `msgsend()`
+
+**Purpose**: Sends a message to a queue.
+
+```c
+int msgsend(int qid, char* msg, int size)
+{
+  if(qid < 0 || qid >= MAX_QUEUES)
+    return -1;
+  
+  struct msg_queue *q = &msg_queues[qid];
+  acquire(&q->lock);
+  
+  // Check if queue is full
+  if(q->size == MAX_QUEUE_SIZE) {
+    release(&q->lock);
+    return -1;
+  }
+  
+  // Copy message to queue
+  char* new_msg = kalloc();
+  memmove(new_msg, msg, size);
+  q->items[q->rear] = new_msg;
+  q->rear = (q->rear + 1) % MAX_QUEUE_SIZE;
+  q->size++;
+  
+  release(&q->lock);
+  return 0;
+}
+```
+
+- Checks for valid queue ID and if the queue is full.
+- Allocates memory for the message and adds it to the queue.
+
+#### 3. `msgrcv()`
+
+**Purpose**: Receives a message from a queue.
+
+```c
+int msgrcv(int qid, char* buf, int size)
+{
+  if(qid < 0 || qid >= MAX_QUEUES)
+    return -1;
+  
+  struct msg_queue *q = &msg_queues[qid];
+  acquire(&q->lock);
+  
+  // Check if queue is empty
+  if(q->size == 0) {
+    release(&q->lock);
+    return -1;
+  }
+  
+  // Copy message from queue to user buffer
+  char* msg = q->items[q->front];
+  int msg_size = strlen(msg);
+  if(msg_size > size)
+    msg_size = size;
+  memmove(buf, msg, msg_size);
+  
+  // Free queue slot
+  kfree(msg);
+  q->front = (q->front + 1) % MAX_QUEUE_SIZE;
+  q->size--;
+  
+  release(&q->lock);
+  return msg_size;
+}
+```
+
+- Checks for valid queue ID and if the queue is empty.
+- Copies the message to the user-provided buffer and frees the memory.
+
+#### 4. `msgclose()`
+
+**Purpose**: Closes access to a message queue.
+
+```c
+int msgclose(int qid)
+{
+  if(qid < 0 || qid >= MAX_QUEUES)
+    return -1;
+  
+  struct msg_queue *q = &msg_queues[qid];
+  acquire(&q->lock);
+  
+  // Free any remaining messages
+  while(q->size > 0) {
+    kfree(q->items[q->front]);
+    q->front = (q->front + 1) % MAX_QUEUE_SIZE;
+    q->size--;
+  }
+  
+  q->ref_count--;
+  release(&q->lock);
+  return 0;
+}
+```
+
+- Frees any remaining messages in the queue and decreases the reference count.
+
+---
+
+### 2. Semaphore Implementation
+
+#### Core Data Structures
+
+```c
+// Semaphore Structure
+struct semaphore {
+  int value;                  // Semaphore counter
+  char name[16];              // Semaphore name
+  struct spinlock lock;       // Lock for synchronization
+  struct proc *waiting[64];   // Array of waiting processes
+  int wait_count;             // Number of waiting processes
+  int ref_count;              // Number of processes using semaphore
+};
+```
+
+- **value**: The current value of the semaphore (used to block or unblock processes).
+- **name**: A string for the semaphore's name.
+- **lock**: A spinlock to protect semaphore operations.
+- **waiting**: Array of processes waiting for the semaphore.
+- **wait_count**: Number of processes currently waiting on the semaphore.
+- **ref_count**: Tracks the number of processes using the semaphore.
+
+#### Global Array of Semaphores
+
+```c
+struct semaphore semaphores[MAX_SEMS];
+```
+
+- **semaphores**: Global array that holds all available semaphores.
+
+### Key System Calls
+
+#### 1. `sem_create()`
+
+**Purpose**: Creates a new semaphore.
+
+```c
+int sem_create(char *name, int value)
+{
+  // Find available semaphore slot
+  for(int i = 0; i < MAX_SEMS; i++) {
+    if(semaphores[i].ref_count == 0) {
+      // Initialize semaphore
+      semaphores[i].value = value;
+      strncpy(semaphores[i].name, name, 15);
+      semaphores[i].name[15] = 0;
+      semaphores[i].wait_count = 0;
+      semaphores[i].ref_count = 1;
+      initlock(&semaphores[i].lock, "sem");
+      return i;  // Return semaphore ID
+    }
+  }
+  return -1;  // No available semaphores
+}
+```
+
+- Initializes a new semaphore and returns its ID.
+
+#### 2. `sem_wait()`
+
+**Purpose**: Decrements semaphore value or blocks if zero.
+
+```c
+int sem_wait(int sid)
+{
+  if(sid < 0 || sid >= MAX_SEMS)
+    return -1;
+  
+  struct semaphore *s = &semaphores[sid];
+  acquire(&s->lock);
+  
+  while(s->value <= 0) {
+    // Add process to waiting list
+    s->waiting[s->wait_count++] = myproc();
+    sleep(myproc(), &s->lock);
+  }
+  
+  s->value--;
+  release(&s->lock);
+  return 0;
+}
+```
+
+- Decrements the semaphore value and blocks the calling process if the value is zero.
+
+#### 3. `sem_signal()`
+
+**Purpose**: Increments semaphore value and wakes up a waiting process.
+
+```c
+int sem_signal(int sid)
+{
+  if(sid < 0 || sid >= MAX_SEMS)
+    return -1;
+  
+  struct semaphore *s = &semaphores[sid];
+  acquire(&s->lock);
+  
+  s->value++;
+  
+  // Wake up one waiting process
+  if(s->wait_count > 0) {
+    wakeup(s->waiting[--s->wait_count]);
+  }
+  
+  release(&s->lock);
+  return 0;
+}
+```
+
+- Increments the semaphore value and wakes up one waiting process.
+
+#### 4. `sem_delete()`
+
+**Purpose**: Deletes a semaphore.
+
+```c
+int sem_delete(int sid)
+{
+  if(sid < 0 || sid >= MAX_SEMS)
+    return -1;
+  
+  struct semaphore *s = &semaphores[sid];
+  acquire(&s->lock);
+  
+  // Wake up all waiting processes
+  while(s->wait_count > 0) {
+    wakeup(s->waiting[--s->wait_count]);
+  }
+  
+  s->ref_count--;
+  release(&s->lock);
+  return 0;
+}
+```
+
+- Deletes the semaphore and wakes up all waiting processes.
+
+---
+
+## 3. Key Implementation Notes
+
+### Message Queue Features:
+
+- **Circular Buffer**: Implements a circular buffer to efficiently use memory by overwriting the oldest messages when the queue is full.
+- **Reference Counting**: Tracks the number of processes using the queue. This allows proper resource management and ensures the queue is not prematurely freed.
+- **Lock Protection**: Uses spinlocks to protect critical operations on the message queue, ensuring mutual exclusion when accessing or modifying the queue.
+- **Dynamic Memory**: Allocates and frees memory dynamically for each message, ensuring efficient use of memory resources without unnecessary overhead.
+
+### Semaphore Features:
+
+- **Named Semaphores**: Each semaphore has a descriptive name to identify its purpose.
+- **Process Queue**: Maintains a list of processes waiting on the semaphore, which allows efficient process scheduling.
+- **FIFO Ordering**: Processes waiting on a semaphore are woken up in a first-in-first-out order to avoid starvation.
+- **Reference Counting**: Keeps track of the number of processes using a semaphore to prevent premature deletion or deallocation.
+
+### Synchronization Mechanisms:
+
+- **Spinlocks**: Used for short-term synchronization when the process is expected to block briefly and the lock is expected to be released soon.
+- **Sleep/Wakeup**: Used for longer-term blocking where a process must wait until a specific condition is met (e.g., semaphore value changes or a message is available in the queue).
+- **Atomic Operations**: Ensures thread-safety by using atomic operations for modifying critical data, preventing race conditions.
+
+### Error Handling:
+
+- **Range Checking on Queue and Semaphore IDs**: Ensures that operations on queues or semaphores are performed within valid index ranges, preventing invalid memory access or crashes.
+- **Memory Allocation Failure Detection**: Detects when memory allocation fails (e.g., when a message cannot be allocated for a queue), and handles it gracefully.
+- **Queue Full/Empty Condition Handling**: Handles situations where the queue is full (for sending messages) or empty (for receiving messages), ensuring proper error handling and synchronization.
+- **Invalid Operation Detection**: Provides error handling for invalid operations, such as trying to dequeue from an empty queue or use a non-existent semaphore.
+
+---
+
+## 4. Usage Guidelines
+
+### Message Queues:
+
+- **Always Check Return Values for Errors**: Ensure that return values from message queue functions (e.g., `msgsend()`, `msgrcv()`) are checked for errors, such as queue full or empty conditions.
+- **Close Queues When Done**: Always close a message queue using `msgclose()` when it's no longer needed to prevent resource leaks.
+- **Keep Messages Smaller Than MAX_MSG_SIZE**: Ensure that the messages being sent are within the allowed size to prevent buffer overflows or truncation.
+- **Handle Queue Full/Empty Conditions Appropriately**: Implement proper handling when the queue is full (e.g., retrying later or blocking until space is available) or empty (e.g., waiting or returning an error).
+
+### Semaphores:
+
+- **Initialize with Appropriate Starting Values**: Ensure semaphores are initialized with correct starting values. A semaphore initialized to 0 will block all waiting processes, while a positive value allows immediate access.
+- **Always Pair `wait()` with `signal()`**: To avoid deadlocks, always ensure that each `sem_wait()` operation is paired with a corresponding `sem_signal()`.
+- **Clean Up Semaphores When Done**: After semaphores are no longer needed, delete them using `sem_delete()` to prevent resource leaks.
+- **Be Careful of Deadlock Situations**: When using semaphores, ensure that processes are not holding locks in a circular manner, as this could lead to deadlocks. Always ensure that semaphores are released in the correct order.
+
