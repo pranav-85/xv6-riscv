@@ -3,16 +3,6 @@
 
 ### Core Data Structures
 
-```c
-// Message Queue Structure
-struct msg_queue {
-  char* items[MAX_QUEUE_SIZE];  // Array to store messages
-  int front;                    // Index for dequeuing
-  int rear;                     // Index for enqueuing
-  int size;                     // Current number of messages
-  int ref_count;               // Number of processes using the queue
-  struct spinlock lock;        // Lock for synchronization
-};
-
-// Global array of message queues
-struct msg_queue msg_queues[MAX_QUEUES];
+```bash
+cd my
+```
