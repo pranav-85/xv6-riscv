@@ -379,3 +379,203 @@ struct semaphore {
 2. Always pair wait() with signal()
 3. Clean up semaphores when done
 4. Be careful of deadlock situations
+
+## **System Call: `rename`**
+
+---
+
+#### **Purpose**  
+Rename a file or directory from an old path to a new path.
+
+---
+
+#### **Usage**  
+In user programs, the `rename` system call is used as:  
+```c
+int rename(const char *oldpath, const char *newpath);
+```
+
+**Parameters:**  
+- `oldpath`: The current path of the file or directory to rename.  
+- `newpath`: The desired new path for the file or directory.  
+
+**Returns:**  
+- `0` on success.  
+- `-1` on failure.  
+
+**Example:**  
+```c
+if (rename("oldfile.txt", "newfile.txt") < 0) {
+    printf("Rename failed\n");
+}
+```
+
+---
+
+#### **Code**
+```c
+int sys_rename(void) {
+  char oldpath[MAXPATH], newpath[MAXPATH];
+  struct inode *old_ip = 0, *new_ip = 0;
+  struct inode *dp = 0, *old_dp = 0;
+  char name[DIRSIZ], oldname[DIRSIZ];
+  struct dirent de;
+  int off;
+
+  if (argstr(0, oldpath, MAXPATH) < 0 || argstr(1, newpath, MAXPATH) < 0) {
+    return -1;
+  }
+
+  begin_op();
+
+  if ((old_ip = namei(oldpath)) == 0) {
+    end_op();
+    return -1;
+  }
+  ilock(old_ip);
+
+  if ((new_ip = namei(newpath)) != 0) {
+    iunlockput(old_ip);
+    iput(new_ip);
+    end_op();
+    return -1;
+  }
+
+  if ((old_dp = nameiparent(oldpath, oldname)) == 0 || 
+      (dp = nameiparent(newpath, name)) == 0) {
+    iput(old_dp);
+    iunlockput(old_ip);
+    end_op();
+    return -1;
+  }
+
+  if (old_ip->type == T_DIR && 
+      (namecmp(oldname, ".") == 0 || namecmp(oldname, "..") == 0)) {
+    iput(old_dp);
+    iput(dp);
+    iunlockput(old_ip);
+    end_op();
+    return -1;
+  }
+
+  if (old_dp < dp) {
+    ilock(old_dp);
+    ilock(dp);
+  } else {
+    ilock(dp);
+    if (old_dp != dp)
+      ilock(old_dp);
+  }
+
+  if (old_dp->dev != dp->dev || old_dp->dev != old_ip->dev) {
+    iunlockput(old_dp);
+    if (old_dp != dp) {
+      iunlockput(dp);
+    }
+    iunlockput(old_ip);
+    end_op();
+    return -1;
+  }
+
+  if (dirlink(dp, name, old_ip->inum) < 0) {
+    iunlockput(old_dp);
+    if (old_dp != dp) {
+      iunlockput(dp);
+    }
+    iunlockput(old_ip);
+    end_op();
+    return -1;
+  }
+
+  for (off = 0; off < old_dp->size; off += sizeof(de)) {
+    if (readi(old_dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+      panic("rename: readi");
+    if (de.inum != 0 && namecmp(de.name, oldname) == 0) {
+      de.inum = 0;
+      if (writei(old_dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+        panic("rename: writei");
+      break;
+    }
+  }
+
+  if (old_dp != dp) {
+    iunlockput(old_dp);
+  }
+  iunlockput(dp);
+  iunlockput(old_ip);
+
+  end_op();
+  return 0;
+}
+```
+
+---
+
+### 4. **System Call: `createfile`**
+
+---
+
+#### **Purpose**  
+Creates a new file. If a file with the same name already exists, automatically generates a numbered version.
+
+---
+
+#### **Usage**  
+In user programs, the `createfile` system call is used as:  
+```c
+int createfile(const char *filename);
+```
+
+**Parameters:**  
+- `filename`: The desired name of the file to create.  
+
+**Returns:**  
+- File descriptor (`int`) on success.  
+- `-1` on failure.  
+
+**Example:**  
+```c
+int fd = createfile("newfile.txt");
+if (fd < 0) {
+    printf("File creation failed\n");
+} else {
+    printf("File created successfully\n");
+    close(fd);
+}
+```
+
+---
+
+#### **Code**
+```c
+int sys_createfile(void) {
+  char path[MAXPATH];
+  struct file *f;
+  int fd;
+
+  if (argstr(0, path, MAXPATH) < 0)
+    return -1;
+
+  fd = -1;
+  f = filealloc();
+  if (f == 0)
+    return -1;
+
+  f->ip = create(path, T_FILE, 0, 0);
+  if (f->ip == 0) {
+    fileclose(f);
+    return -1;
+  }
+  f->type = FD_INODE;
+  f->off = 0;
+  f->readable = 1;
+  f->writable = 1;
+
+  if ((fd = fdalloc(f)) < 0) {
+    fileclose(f);
+    return -1;
+  }
+
+  return fd;
+}
+```
